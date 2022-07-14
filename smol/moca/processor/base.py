@@ -16,7 +16,7 @@ from functools import lru_cache
 
 import numpy as np
 from monty.json import MSONable
-from pymatgen.core import PeriodicSite, Structure
+from pymatgen.core import PeriodicSite, Structure, Element
 
 from smol.cofe.space import Vacancy, get_allowed_species, get_site_spaces
 from smol.moca.sublattice import Sublattice
@@ -229,6 +229,84 @@ class Processor(MSONable, metaclass=ABCMeta):
             )
             for site_space in self.unique_site_spaces
         ]
+
+    def gen_random_occu(self, rng=None):
+        """Generate a random encoded occupancy according to a list of sublattices.
+
+            Args:
+                sublattices (Sequence of Sublattice):
+                    A sequence of sublattices
+                rng (optional): {None, int, array_like[ints], SeedSequence,
+                                BitGenerator, Generator}
+                                A RNG, seed or otherwise to initialize default_rng
+
+            Returns:
+                ndarray: encoded occupancy
+            """
+        sublattices = self.get_sublattices()
+        num_sites = sum(len(sl.sites) for sl in sublattices)
+        rand_occu = np.zeros(num_sites, dtype=int)
+        rng = np.random.default_rng(rng)
+        for sublatt in sublattices:
+            rand_occu[sublatt.sites] = rng.choice(
+                sublatt.encoding, size=len(sublatt.sites), replace=True
+            )
+        return rand_occu
+
+    def gen_random_neutral_occu(self, lam, max_it=10000, rng=None):
+        """Generate a random encoded occupancy according to a list of sublattices.
+
+            Args:
+                sublattices (Sequence of Sublattice):
+                    A sequence of sublattices
+                rng (optional): {None, int, array_like[ints], SeedSequence, BitGenerator
+                                , Generator},
+                    A RNG, seed or otherwise to initialize default_rng
+
+            Returns:
+                ndarray: encoded occupancy
+            """
+
+        rng = np.random.default_rng(rng)
+        sublattices = self.get_sublattices()
+
+        def get_charge(sp):
+            if isinstance(sp, (Element, Vacancy)):
+                return 0
+            else:
+                return sp.oxi_state
+
+        def charge(occu, sublattices):
+            charge = 0
+            for sl in sublattices:
+                for site in sl.sites:
+                    sp_id = sl.encoding.tolist().index(occu[site])
+                    charge += get_charge(sl.species[sp_id])
+            return charge
+
+        def flip(occu, sublattices, lam=10):
+            actives = [s for s in sublattices if s.is_active]
+            sl = rng.choice(actives)
+            site = rng.choice(sl.sites)
+            code = rng.choice(list(set(sl.encoding) - {occu[site]}))
+            occu_next = occu.copy()
+            occu_next[site] = code
+            C = charge(occu, sublattices)
+            C_next = charge(occu_next, sublattices)
+            accept = np.log(rng.random()) < -lam * (C_next ** 2 - C ** 2)
+            if accept and C != 0:
+                return occu_next.copy(), C_next
+            else:
+                return occu.copy(), C
+
+        occu = self.gen_random_occu(rng=rng)
+
+        for _ in range(max_it):
+            occu, C = flip(occu, sublattices, lam=lam)
+            if C == 0:
+                return occu.copy()
+
+        raise TimeoutError(f"Cannot generate a neutral occupancy in {max_it} flips!")
 
     def compute_average_drift(self, iterations=1000):
         """Compute average forward and reverse drift for the given property.
