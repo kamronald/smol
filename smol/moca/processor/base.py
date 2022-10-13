@@ -171,7 +171,7 @@ class Processor(MSONable, metaclass=ABCMeta):
         )
         return self.encode_occupancy(occu)
 
-    def structure_from_occupancy(self, occupancy):
+    def structure_from_occupancy(self, occupancy, include_vacancies=False):
         """Get Structure from an occupancy string.
 
         Args:
@@ -184,7 +184,9 @@ class Processor(MSONable, metaclass=ABCMeta):
         occupancy = self.decode_occupancy(occupancy)
         sites = []
         for spec, site in zip(occupancy, self.structure):
-            if spec != Vacancy():
+            if spec == Vacancy() and not include_vacancies:
+                continue
+            else:
                 site = PeriodicSite(spec, site.frac_coords, self.structure.lattice)
                 sites.append(site)
         return Structure.from_sites(sites)
