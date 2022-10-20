@@ -14,11 +14,9 @@ __author__ = "Ronald Kam"
 
 import copy
 import math
-import numpy as np
+
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from pymatgen.core import Structure, PeriodicSite
-from smol.cofe.space import Vacancy, get_allowed_species, get_site_spaces
-from smol.moca.sublattice import Sublattice
+
 from smol.constants import kB
 
 
