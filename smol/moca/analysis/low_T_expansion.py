@@ -1,6 +1,13 @@
-""" Implementation of low temperature expansion to treat the configurational free
+""" Implementation of low temperature expansion (LTE) to treat the configurational free
 energy at low temperatures, where it is likely that MC will get "stuck" on ground
-states, yielding unconverged thermodynamic quantities.
+states, yielding unconverged thermodynamic quantities. The principle of LTE is to
+enumerate the possible excitations from a ground state and construct a partition
+function with their associated energies.
+
+For reference:
+Kohan, A. F.; Tepesch, P. D.; Ceder, G.; Wolverton, C. Computation of Alloy Phase
+Diagrams at Low Temperatures. Comp Mater Sci 1998, 9 (3–4), 389–396.
+
 """
 
 __author__ = "Ronald Kam"
@@ -113,7 +120,7 @@ def gen_swap_energies(species_site_map, processor, occu):
     swap_en_mults = {}
     for i in range(len(all_species)-1):
         for equiv_sites_i in species_site_map[all_species[i]]:
-            # Perform swaps with all the other sites, keeping in mind not to duplicate
+            # Perform swaps with all the other species, keeping in mind not to duplicate
             site_i_ind = equiv_sites_i[0]
             # only need to swap one of these sites, the rest are symmetrically equiv.
             multiplicity = len(equiv_sites_i)
