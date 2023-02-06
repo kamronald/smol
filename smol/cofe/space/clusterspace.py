@@ -28,6 +28,7 @@ from pymatgen.util.coord import (
     is_coord_subset_pbc,
     lattice_points_in_supercell,
 )
+from scipy.linalg import block_diag
 
 from smol.cofe.space import (
     Orbit,
@@ -112,13 +113,13 @@ class ClusterSubspace(MSONable):
                 StructureMatcher used to find supercell matrices
                 relating the prim structure to other structures. If you pass
                 this directly you should know how to set the matcher up,
-                otherwise matching your relaxed structures can fail, alot.
+                otherwise matching your relaxed structures can fail, a lot.
             site_matcher (StructureMatcher): optional
                 StructureMatcher used to find site mappings
                 relating the sites of a given structure to an appropriate
                 supercell of the prim structure . If you pass this directly you
                 should know how to set the matcher up, otherwise matching your
-                relaxed structures can fail, alot.
+                relaxed structures can fail, a lot.
             matcher_kwargs:
                 ltol, stol, angle_tol, supercell_size: parameters to pass
                 through to the StructureMatchers. Structures that don't match
@@ -238,13 +239,13 @@ class ClusterSubspace(MSONable):
                 StructureMatcher used to find supercell matrices
                 relating the prim structure to other structures. If you pass
                 this directly you should know how to set the matcher up,
-                otherwise matching your relaxed structures will fail, alot.
+                otherwise matching your relaxed structures will fail, a lot.
             site_matcher (StructureMatcher): optional
                 StructureMatcher used to find site mappings
                 relating the sites of a given structure to an appropriate
                 supercell of the prim structure . If you pass this directly you
                 should know how to set the matcher up, otherwise matching your
-                relaxed structures will fail, alot.
+                relaxed structures will fail, a lot.
             matcher_kwargs:
                 ltol, stol, angle_tol, supercell_size: parameters to pass
                 through to the StructureMatchers. Structures that don't match
@@ -403,6 +404,33 @@ class ClusterSubspace(MSONable):
         (i.e. Ewald electrostatics).
         """
         return self._external_terms
+
+    @property
+    def site_rotation_matrix(self):
+        """Get change of basis matrix from site function rotations.
+
+        Note: this is meant only for rotations using orthonormal site bases.
+        Using it otherwise will not work as expected.
+        """
+        return block_diag([1], *[orb.rotation_array for orb in self.orbits])
+
+    def orbits_by_cutoffs(self, upper, lower=0):
+        """Get orbits with clusters within given diameter cutoffs (inclusive).
+
+        Args:
+           upper (float):
+               upper diameter for clusters to include.
+           lower (float): optional
+               lower diameter for clusters to include.
+
+        Returns:
+           list of Orbits
+        """
+        return [
+            orbit
+            for orbit in self.iterorbits()
+            if lower <= orbit.base_cluster.diameter <= upper
+        ]
 
     def orbit_hierarchy(self, level=1, min_size=1):
         """Get orbit hierarchy by IDs.
@@ -841,6 +869,44 @@ class ClusterSubspace(MSONable):
         for orbit in self.orbits:
             orbit.transform_site_bases(new_basis, orthonormal)
 
+    def rotate_site_basis(self, singlet_id, angle, index1=0, index2=1):
+        """Apply a rotation to a site basis.
+
+        The rotation is applied around an axis normal to the span of the two
+        site functions given by index1 and index 2 (the constant function is
+        not included, i.e. index 0 corresponds to the first non constant
+        function)
+
+        Read warnings in SiteBasis.rotate when using this method.
+        TLDR: Careful when using this with non-orthogonal or biased site bases.
+
+        Args:
+            singlet_id (int):
+                Orbit id of singlet function. Only singlet function ids are
+                valid here.
+            angle (float):
+                Angle to rotate in radians.
+            index1 (int):
+                index of first basis vector in function_array
+            index2 (int):
+                index of second basis vector in function_array
+        """
+        if singlet_id not in range(1, len(self._orbits[1]) + 1):
+            raise ValueError("Orbit id provided is not a valid singlet id.")
+
+        basis = self.orbits[singlet_id - 1].site_bases[0]
+        basis.rotate(angle, index1, index2)
+        rotated = [basis]
+        for orbit in self.orbits:
+            for site_basis in orbit.site_bases:
+                if (
+                    site_basis.site_space == basis.site_space
+                    and site_basis not in rotated
+                ):  # maybe clean this up?
+                    site_basis.rotate(angle, index1, index2)
+                    rotated.append(site_basis)
+            orbit.reset_bases()
+
     def remove_orbits(self, orbit_ids):
         """Remove whole orbits by their ids.
 
@@ -879,6 +945,13 @@ class ClusterSubspace(MSONable):
             self._orbits[size] = [
                 orbit for orbit in orbits if orbit.id not in orbit_ids
             ]
+
+        # remove any empty keys if all orbits of a given size were removed
+        for size in list(
+            self._orbits.keys()
+        ):  # cast to list bc .keys() behaves like an iterator
+            if len(self._orbits[size]) == 0:
+                del self._orbits[size]
 
         self._assign_orbit_ids()  # Re-assign ids
         # Clear the cached supercell orbit mappings
@@ -1097,7 +1170,7 @@ class ClusterSubspace(MSONable):
             basis (str):
                 name identifying site basis set to use.
             orthonorm (bool):
-                wether to ensure orthonormal basis set.
+                whether to ensure orthonormal basis set.
             use_conc (bool):
                 If true the concentrations in the prim structure sites will be
                 used as the measure to orthormalize site bases.
@@ -1295,7 +1368,7 @@ class ClusterSubspace(MSONable):
             # orbit_ids holds orbit, and 2d array of index groups that
             # correspond to the orbit
             # the 2d array may have some duplicates. This is due to
-            # symetrically equivalent groups being matched to the same sites
+            # symmetrically equivalent groups being matched to the same sites
             # (eg in simply cubic all 6 nn interactions will all be [0, 0]
             # indices. This multiplicity disappears as supercell_structure size
             # increases, so I haven't implemented a more efficient method
@@ -1459,7 +1532,7 @@ def invert_mapping(mapping):
     Args:
         mapping (list of lists):
             List of sublists, each contains integer indices, indicating
-            a foward mapping from the current sublist index to the indices
+            a forward mapping from the current sublist index to the indices
             in the sublist.
 
     Returns:
@@ -1491,7 +1564,7 @@ def get_complete_mapping(mapping):
     Args:
         mapping (list of lists):
              List of sublists, each contains integer indices, indicating
-            a foward mapping from the current sublist index to the indices
+            a forward mapping from the current sublist index to the indices
             in the sublist.
 
     Returns:
@@ -1578,13 +1651,13 @@ class PottsSubspace(ClusterSubspace):
                 StructureMatcher used to find supercell matrices
                 relating the prim structure to other structures. If you pass
                 this directly you should know how to set the matcher up,
-                otherwise matching your relaxed structures can fail, alot.
+                otherwise matching your relaxed structures can fail, a lot.
             site_matcher (StructureMatcher): (optional)
                 StructureMatcher used to find site mappings
                 relating the sites of a given structure to an appropriate
                 supercell of the prim structure . If you pass this directly you
                 should know how to set the matcher up, otherwise matching your
-                relaxed structures can fail, alot.
+                relaxed structures can fail, a lot.
             matcher_kwargs:
                 ltol, stol, angle_tol, supercell_size: parameters to pass
                 through to the StructureMatchers. Structures that don't match
@@ -1643,13 +1716,13 @@ class PottsSubspace(ClusterSubspace):
                StructureMatcher used to find supercell matrices
                relating the prim structure to other structures. If you pass
                this directly you should know how to set the matcher up,
-               otherwise matching your relaxed structures will fail, alot.
+               otherwise matching your relaxed structures will fail, a lot.
            site_matcher (StructureMatcher): (optional)
                StructureMatcher used to find site mappings
                relating the sites of a given structure to an appropriate
                supercell of the prim structure . If you pass this directly you
                should know how to set the matcher up, otherwise matching your
-               relaxed structures will fail, alot.
+               relaxed structures will fail, a lot.
            matcher_kwargs:
                ltol, stol, angle_tol, supercell_size: parameters to pass
                through to the StructureMatchers. Structures that don't match

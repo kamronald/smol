@@ -140,14 +140,14 @@ def compute_snf(a):
             Smith decomposition of a, such that:
             m is the smith normal form and m = s a t.
     """
-    # Matrix pivoting operations.
-    def leftmult(m, i0, i1, a, b, c, d):
+
+    def leftmult(m, i0, i1, a, b, c, d):  # Matrix pivoting operations.
         for j in range(m.shape[1]):
             x, y = m[i0, j], m[i1, j]
             m[i0, j] = a * x + b * y
             m[i1, j] = c * x + d * y
 
-    def rightmult(m, j0, j1, a, b, c, d):
+    def rightmult(m, j0, j1, a, b, c, d):  # Matrix pivoting operations.
         for i in range(m.shape[0]):
             x, y = m[i, j0], m[i, j1]
             m[i, j0] = a * x + c * y
@@ -480,7 +480,7 @@ def get_natural_solutions(n0, vs, integer_tol=NUM_TOL, step=1):
         1, This function is very costly! Do not
     use it with a large super-cell size!
         2, This function does not apply to any n0
-    and vs. It only applys to bounded polytopes!
+    and vs. It only applies to bounded polytopes!
 
     Args:
         n0(1D ArrayLike[int]):

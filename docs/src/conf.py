@@ -91,9 +91,14 @@ pygments_style = "sphinx"
 
 html_theme = "pydata_sphinx_theme"
 
-html_logo = "_static/logo.png"  # banner.svg needs text as paths to avoid font missing
+# TODO: update this when fixed version of pydata-sphinx-theme is released
+# html_logo = "_static/logo.png"  # banner.svg needs text as paths to avoid font missing
 
 html_theme_options = {
+    "logo": {
+        "image_light": "logo.png",
+        "image_dark": "logo.png",
+    },
     "github_url": "https://github.com/CederGroupHub/smol",
     "use_edit_page_button": True,
     "show_toc_level": 2,
@@ -103,7 +108,7 @@ html_theme_options = {
     # "navbar_center": ["navbar-nav", "navbar-version"],  # Just for testing
     "navigation_depth": 2,
     "show_nav_level": 2,
-    "navbar_end": ["version-switcher", "navbar-icon-links"],  #
+    "navbar_end": ["version-switcher", "theme-switcher", "navbar-icon-links"],  #
     # "left_sidebar_end": ["custom-template.html", "sidebar-ethical-ads.html"],
     # "footer_items": ["copyright", "sphinx-version", ""]
     "switcher": {
@@ -129,6 +134,7 @@ html_context = {
     "github_version": "main",
     "doc_path": "docs/src",
     "source_suffix": source_suffix,
+    "default_mode": "auto",
 }
 
 # Custom sidebar templates, maps page names to templates.

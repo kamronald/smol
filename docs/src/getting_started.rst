@@ -7,7 +7,7 @@ Getting Started
 
 Installation
 ============
-**smol** is purposedly light on dependencies which should make the installation
+**smol** is purposely light on dependencies which should make the installation
 process headache free. Using ``pip``::
 
         pip install smol
@@ -81,7 +81,7 @@ fit.
     >>> reg.fit(wrangler.feature_matrix, wrangler.get_property_vector("energy"))
 
 Finally, create a cluster expansion for prediction of new structures and
-eventual Monte Carlo sampling. We recommed saving the details used to fit the
+eventual Monte Carlo sampling. We recommend saving the details used to fit the
 expansion for future reproducibility (although this is not strictly necessary).
 
 .. nbplot::
@@ -129,7 +129,7 @@ given a disordered one.
     >>> structure = transformation.apply_transformation(structure)
 
 Finally, the ordered structure can be used to generate an initial configuration
-to run MC sampling interations.
+to run MC sampling.
 
 .. nbplot::
 
@@ -139,7 +139,7 @@ to run MC sampling interations.
 Saving the generated objects and data
 -------------------------------------
 To save the generated objects for the previous workflow we can simply use the
-provided convenience io functionaltiy. However, all main classes are
+provided convenience io functionality. However, all main classes are
 serializable just as pymatgen and so can be saved as json dictionaries or
 using the `monty <https://guide.materialsvirtuallab.org/monty//>`_ python
 package.
@@ -170,9 +170,10 @@ Basic Examples
 - `Creating a basic cluster expansion`_
 - `Creating a cluster expansion with electrostatics`_
 - `Visualizing clusters`_
-- `Running Canonical Monte Carlo`_
-- `Running Semigrand Canonical Monte Carlo`_
-- `Running Charge Neutral Semigrand Canonical Monte Carlo`_
+- `Running canonical Monte Carlo`_
+- `Running semigrand canonical Monte Carlo`_
+- `Running charge neutral semigrand canonical Monte Carlo`_
+- `Wang-Landau sampling of an FCC Ising model`_
 - `Preparing cluster expansion training data`_
 
 .. _Creating a basic cluster expansion: notebooks/creating-a-ce.ipynb
@@ -186,6 +187,8 @@ Basic Examples
 .. _Running Semigrand Canonical Monte Carlo: notebooks/running-semigrand-mc.ipynb
 
 .. _Running Charge Neutral Semigrand Canonical Monte Carlo: notebooks/running-charge-balanced-gcmc.ipynb
+
+.. _Wang-Landau sampling of an FCC Ising model: notebooks/wang-landau-ising.ipynb
 
 .. _Preparing cluster expansion training data: notebooks/training-data-preparation.ipynb
 

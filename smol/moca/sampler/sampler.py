@@ -13,7 +13,8 @@ from warnings import warn
 import numpy as np
 
 from smol.moca.sampler.container import SampleContainer
-from smol.moca.sampler.kernel import Trace, mckernel_factory
+from smol.moca.sampler.kernel import mckernel_factory
+from smol.moca.sampler.namespace import Trace
 from smol.utils import progress_bar
 
 
@@ -42,8 +43,9 @@ class Sampler:
         """
         self._kernels = kernels
         self._container = container
-        #  Save the seed for reproducibility
-        self._container.metadata["seeds"] = [kernel.seed for kernel in kernels]
+
+        #  Save kernel specifications  #
+        self._container.metadata.kernels = [kernel.spec for kernel in kernels]
 
     @classmethod
     def from_ensemble(
@@ -110,6 +112,7 @@ class Sampler:
             )
             for seed in seeds
         ]
+
         # get a trial trace to initialize sample container trace
         _trace = mckernels[0].compute_initial_trace(
             np.zeros(ensemble.num_sites, dtype=int)
@@ -121,15 +124,12 @@ class Sampler:
             }
         )
 
-        sampling_metadata = {"kernel": kernel_type, "step": step_type}
-        sampling_metadata.update(ensemble.thermo_boundaries)
+        sampling_metadata = ensemble.thermo_boundaries
 
         # Container will be initialized to read all sub-lattices,
         # active or not.
         container = SampleContainer(
-            ensemble.sublattices,
-            ensemble.natural_parameters,
-            ensemble.num_energy_coefs,
+            ensemble,
             sample_trace,
             sampling_metadata,
         )
@@ -194,7 +194,7 @@ class Sampler:
         # TODO check that initial states are independent if num_walkers > 1
         # TODO make samplers with single chain, multiple and multiprocess
         # TODO kernel should take only 1 occupancy
-        # set up any auxiliary states from inital occupancies
+        # set up any auxiliary states from initial occupancies
         for kernel, occupancy in zip(self._kernels, occupancies):
             kernel.set_aux_state(occupancy)
 
@@ -202,7 +202,7 @@ class Sampler:
         trace = Trace()
         traces = list(map(self._kernels[0].compute_initial_trace, occupancies))
         for name in traces[0].names:
-            stack = np.vstack([getattr(tr, name) for tr in traces])
+            stack = np.stack([getattr(tr, name) for tr in traces], axis=0)
             setattr(trace, name, stack)
 
         # Initialise progress bar
@@ -315,7 +315,7 @@ class Sampler:
             if keep_last_chunk is False:
                 self.clear_samples()
 
-        # A checkpoing of aux states should be saved to container here.
+        # A checkpoint of aux states should be saved to container here.
         # Note that to save any general "state" we will need to make sure it is
         # properly serializable to save as json and also to save in h5py
 

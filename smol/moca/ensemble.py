@@ -10,6 +10,7 @@ from pymatgen.core.composition import ChemicalPotential
 
 from smol.cofe.space.domain import get_species
 from smol.moca.processor import (
+    ClusterDecompositionProcessor,
     ClusterExpansionProcessor,
     CompositeProcessor,
     EwaldProcessor,
@@ -90,7 +91,7 @@ class ChemicalPotentialManager:
         """Set the chemical potentials and update table."""
         num_cols = max(max(sl.encoding) for sl in obj.sublattices) + 1
 
-        # Sublattice can only be initialized as default, or splitted from default.
+        # Sublattice can only be initialized as default, or split from default.
         table = np.zeros((obj.num_sites, num_cols))
         for sublatt in obj.active_sublattices:
             ordered_pots = [value[sp] for sp in sublatt.site_space]
@@ -104,8 +105,7 @@ class Ensemble(MSONable):
     Attributes:
         thermo_boundaries (dict):
             Dictionary with corresponding thermodynamic boundaries, i.e.
-            chemical potentials or fugacity fractions. This is kept only for
-            descriptive purposes.
+            chemical potentials. This is kept only for descriptive purposes.
     """
 
     chemical_potentials = ChemicalPotentialManager()
@@ -130,7 +130,13 @@ class Ensemble(MSONable):
         self.chemical_potentials = chemical_potentials
 
     @classmethod
-    def from_cluster_expansion(cls, cluster_expansion, supercell_matrix, **kwargs):
+    def from_cluster_expansion(
+        cls,
+        cluster_expansion,
+        supercell_matrix,
+        processor_type="decomposition",
+        **kwargs,
+    ):
         """Initialize an ensemble from a cluster expansion.
 
         Convenience constructor to instantiate an ensemble. This will take
@@ -142,6 +148,9 @@ class Ensemble(MSONable):
                 A cluster expansion object.
             supercell_matrix (ndarray):
                 Supercell matrix defining the system size.
+            processor_type(str): optional
+                Type of processor to be used besides external term.
+                Can use "decomposition" (default) or "expansion".
             **kwargs:
                 Keyword arguments to pass to ensemble constructor. Such as
                 sublattices, sublattice_probabilities, chemical_potentials,
@@ -154,11 +163,20 @@ class Ensemble(MSONable):
             processor = CompositeProcessor(
                 cluster_expansion.cluster_subspace, supercell_matrix
             )
-            ceprocessor = ClusterExpansionProcessor(
-                cluster_expansion.cluster_subspace,
-                supercell_matrix,
-                cluster_expansion.coefs[:-1],
-            )
+            if processor_type == "decomposition":
+                ceprocessor = ClusterDecompositionProcessor(
+                    cluster_expansion.cluster_subspace,
+                    supercell_matrix,
+                    cluster_expansion.cluster_interaction_tensors,
+                )
+            elif processor_type == "expansion":
+                ceprocessor = ClusterExpansionProcessor(
+                    cluster_expansion.cluster_subspace,
+                    supercell_matrix,
+                    cluster_expansion.coefs[:-1],
+                )
+            else:
+                raise ValueError(f"Processor type {processor_type}" f" not supported!")
             processor.add_processor(ceprocessor)
             # at some point determine term and spinup processor maybe with a
             # factory, if we ever implement more external terms.
@@ -171,11 +189,20 @@ class Ensemble(MSONable):
             )
             processor.add_processor(ewprocessor)
         else:
-            processor = ClusterExpansionProcessor(
-                cluster_expansion.cluster_subspace,
-                supercell_matrix,
-                cluster_expansion.coefs,
-            )
+            if processor_type == "decomposition":
+                processor = ClusterDecompositionProcessor(
+                    cluster_expansion.cluster_subspace,
+                    supercell_matrix,
+                    cluster_expansion.cluster_interaction_tensors,
+                )
+            elif processor_type == "expansion":
+                processor = ClusterExpansionProcessor(
+                    cluster_expansion.cluster_subspace,
+                    supercell_matrix,
+                    cluster_expansion.coefs,
+                )
+            else:
+                raise ValueError(f"Processor type {processor_type}" f" not supported!")
         return cls(processor, **kwargs)
 
     @property

@@ -14,6 +14,7 @@ import numpy as np
 
 from smol.cofe.space.domain import get_species
 from smol.moca.composition import get_oxi_state
+from smol.moca.sampler.namespace import Metadata
 from smol.moca.utils.occu import get_dim_ids_table, occu_to_counts
 from smol.utils import class_name_from_str, derived_class_factory
 
@@ -21,8 +22,9 @@ from smol.utils import class_name_from_str, derived_class_factory
 class MCBias(ABC):
     """Base bias term class.
 
-    Note: Any MCBias should be implemented as beta*E-bias
+    Note: Any MCBias should be implemented as beta * E - bias
     will be minimized in thermodynamics kernel.
+
     Attributes:
         sublattices (List[Sublattice]):
             list of sublattices with active sites.
@@ -48,6 +50,14 @@ class MCBias(ABC):
             sublatt for sublatt in self.sublattices if sublatt.is_active
         ]
         self._rng = np.random.default_rng(rng)
+
+        self.spec = Metadata(
+            type=self.__class__.__name__,
+            sublattices=[
+                sublatt.site_space.as_dict()["composition"]
+                for sublatt in self.sublattices
+            ],
+        )
 
     @abstractmethod
     def compute_bias(self, occupancy):
@@ -106,8 +116,10 @@ class FugacityBias(MCBias):
                 for random structure). If not given this will be taken from the
                 prim structure used in the cluster subspace. Needs to be in
                 the same order as the corresponding sublattice.
+        kwargs:
+            Keyword arguments for initializing MCUsher.
         """
-        super().__init__(sublattices)
+        super().__init__(sublattices, **kwargs)
         self._fus = None
         self._fu_table = None
         # Consider only species on active sub-lattices
@@ -126,6 +138,9 @@ class FugacityBias(MCBias):
                 dict(sublatt.site_space) for sublatt in self.active_sublattices
             ]
         self.fugacity_fractions = fugacity_fractions
+
+        # update spec
+        self.spec.fugacity_fractions = fugacity_fractions
 
     @property
     def fugacity_fractions(self):
@@ -148,7 +163,7 @@ class FugacityBias(MCBias):
         value = [{get_species(k): v for k, v in sub.items()} for sub in value]
         if not all(sum(fus.values()) == 1 for fus in value):
             raise ValueError("Fugacity ratios must add to one.")
-        for (spec, vals) in zip(self._species, value):
+        for spec, vals in zip(self._species, value):
             if spec != set(vals.keys()):
                 raise ValueError(
                     f"Fugacity fractions given are missing or not valid "
@@ -204,7 +219,7 @@ class FugacityBias(MCBias):
         occupancy will have all 1 values and should never be used.
         """
         num_cols = max(max(sublatt.encoding) for sublatt in self.sublattices) + 1
-        # Sublattice can only be initialized as default, or splitted from default.
+        # Sublattice can only be initialized as default, or split from default.
         num_rows = sum(len(sl.sites) for sl in self.sublattices)
         table = np.ones((num_rows, num_cols))
         for fus, sublatt in zip(fugacity_fractions, self.active_sublattices):
@@ -231,8 +246,10 @@ class SquareChargeBias(MCBias):
                 * charge**2.
                 Must be positive. Default to 0.5, which works
                 for most of the cases.
+        kwargs:
+            Keyword arguments for initializing MCUsher.
         """
-        super().__init__(sublattices)
+        super().__init__(sublattices, **kwargs)
         charges = [
             [get_oxi_state(sp) for sp in sublatt.species]
             for sublatt in self.sublattices
@@ -247,6 +264,9 @@ class SquareChargeBias(MCBias):
             cs = np.array(cs)
             table[sublatt.sites[:, None], sublatt.encoding] = cs[None, :]
         self._c_table = table
+
+        # record specifications
+        self.spec.penalty = penalty
 
     def compute_bias(self, occupancy):
         """Compute bias from occupancy.
@@ -313,8 +333,10 @@ class SquareHyperplaneBias(MCBias):
                 Penalty factor. energy/kT will be penalized by adding penalty
                 * ||A n - b||**2. Must be positive.
                 Default to 0.5, which works for most of the cases.
+        kwargs:
+            Keyword arguments for initializing MCUsher.
         """
-        super().__init__(sublattices)
+        super().__init__(sublattices, **kwargs)
         if penalty <= 0:
             raise ValueError("Penalty factor should be > 0!")
         self.penalty = penalty
@@ -322,6 +344,11 @@ class SquareHyperplaneBias(MCBias):
         self._b = np.array(hyperplane_intercepts, dtype=int)
         self._dim_ids_table = get_dim_ids_table(self.sublattices)
         self.d = sum(len(sublatt.species) for sublatt in sublattices)
+
+        # record specifications
+        self.spec.penalty = penalty
+        self.spec.hyperplane_normals = self._A.tolist()
+        self.spec.hyperplane_intercepts = self._b.tolist()
 
     def compute_bias(self, occupancy):
         """Compute bias from occupancy.
@@ -362,7 +389,7 @@ def mcbias_factory(bias_type, sublattices, *args, **kwargs):
             list of active sublattices, containing species information and
             site indices in sublattice.
         *args:
-            positional args to instatiate a bias term.
+            positional args to instantiate a bias term.
         *kwargs:
             keyword argument to instantiate a bias term.
     """
