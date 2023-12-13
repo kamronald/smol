@@ -7,8 +7,6 @@ The PottsSubspace class is an (experimental) class that is similar, but
 diverges from the CE mathematic formalism.
 """
 # pylint: disable=too-many-lines
-
-
 import warnings
 from collections import namedtuple
 from copy import deepcopy
@@ -23,7 +21,7 @@ from pymatgen.analysis.structure_matcher import (
     OrderDisorderElementComparator,
     StructureMatcher,
 )
-from pymatgen.core import PeriodicSite, Structure
+from pymatgen.core import PeriodicSite, Species, Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer, SymmOp
 from pymatgen.util.coord import (
     coord_list_mapping_pbc,
@@ -1988,3 +1986,625 @@ class PottsSubspace(ClusterSubspace):
                 orbit.remove_bit_combos_by_inds([len(orbit.bit_combos) - 1])
         subspace._assign_orbit_ids()
         return subspace
+
+
+class ChemoMagneticSubspace(ClusterSubspace):
+    """A ClusterSubspace spanning ionic and magnetic degrees of freedom.
+
+    A ChemoMagneticSubspace is a related model to a standard ClusterSubspace used to
+    build a standard cluster expansion. The difference is that in addition to the standard
+    correlations functions that describe the chemical degrees of freedom, this subspace includes
+    functions that span the magnetic degrees of freedom. At the moment, we only consider
+    the magnetic structure arising from collinear spin polarization (spins only point up
+    and down, without spin canting). Furthermore, the magnetic and chemical correlation
+    functions are decoupled from each other, which is a simplification of previously
+    developed chemo-magnetic cluster expansion formalisms (see references below).
+    1) Drautz, R.; Fähnle, M. Phys Rev B 2004, 69 (10), 104404.
+    2) Decolvenaere, E.; Ven, A. V. et al. Phys Rev Mater 2019, 3 (10), 104411.
+
+    This model can be interpreted as a mixed-basis cluster subspace, in which the
+    basis functions describing ionic disorder take a different form from those
+    describing the magnetic disorder. From internal benchmarking, we would recommend
+    using a Pott's indicator basis to represent the magnetic disorder, although the user
+    can specify the forms of ionic and magnetic basis functions.
+    """
+
+    def __init__(
+        self,
+        structure,
+        expansion_structure,
+        symops,
+        chemical_orbits,
+        magnetic_orbits,
+        supercell_matcher=None,
+        site_matcher=None,
+        **matcher_kwargs,
+    ):
+        """Initialize a ChemoMagneticSubspace.
+
+        You rarely will need to create a ClusterSubspace using the main
+        constructor.
+        Look at the class method :code:`from_cutoffs` for the "better" way to
+        instantiate a ClusterSubspace.
+
+        Args:
+            structure (Structure):
+                Structure to define the cluster space. Typically the primitive
+                cell. Includes all species regardless of partial occupation.
+            expansion_structure (Structure):
+                Structure including only sites that will be included in the
+                Cluster space. (only those with partial occupancy)
+            symops (list of Symmop):
+                list of Symmops for the given structure.
+            orbits (dict): {size: list of Orbits}
+                Dictionary with size (number of sites) as keys and list of
+                Orbits as values.
+            time_rev_sym (bool):
+                Whether or not to satisfy time-reversal symmetry. For a rigorous
+                magnetic Hamiltonian, this should be set to True, and would lead to
+                magnetic correlation functions with an even degree/parity (ie pairs +
+                quadruplets only)
+            supercell_matcher (StructureMatcher): (optional)
+                StructureMatcher used to find supercell matrices
+                relating the prim structure to other structures. If you pass
+                this directly you should know how to set the matcher up,
+                otherwise matching your relaxed structures can fail, a lot.
+            site_matcher (StructureMatcher): (optional)
+                StructureMatcher used to find site mappings
+                relating the sites of a given structure to an appropriate
+                supercell of the prim structure . If you pass this directly you
+                should know how to set the matcher up, otherwise matching your
+                relaxed structures can fail, a lot.
+            matcher_kwargs:
+                ltol, stol, angle_tol, supercell_size: parameters to pass
+                through to the StructureMatchers. Structures that don't match
+                to the primitive cell under these tolerances won't be included
+                in the expansion. Easiest option for supercell_size is usually
+                to use a species that has a constant amount per formula unit.
+                See pymatgen documentation of :class:`StructureMatcher` for
+                more details.
+        """
+        # self._time_rev_sym = time_rev_sym
+        all_orbits = {}
+        for size, chem_orbs in chemical_orbits.items():
+            if size in mag_orbs:
+                mag_orbs = magnetic_orbits[size]
+                comb_orbs = chem_orbs.extend(mag_orbs)
+            else:
+                comb_orbs = chem_orbs
+            all_orbits[size] = comb_orbs
+
+        super().__init__(
+            structure,
+            expansion_structure,
+            symops,
+            all_orbits,
+            supercell_matcher,
+            site_matcher,
+            **matcher_kwargs,
+        )
+
+        self._orbits = all_orbits
+        self._chemical_orbits = chemical_orbits
+        self._magnetic_orbits = magnetic_orbits
+        self._chem_evaluator = ClusterSpaceEvaluator(
+            get_orbit_data(self.chemical_orbits),
+            len(self.chemical_orbits),
+            self.num_corr_functions,
+        )
+
+        self._mag_evaluator = ClusterSpaceEvaluator(
+            get_orbit_data(self.magnetic_orbits),
+            len(self.magnetic_orbits),
+            self.num_corr_functions,
+        )
+
+    @classmethod
+    def from_cutoffs(
+        cls,
+        structure,
+        chemical_cutoffs,
+        magnetic_cutoffs,
+        chemical_basis="sinusoid",
+        magnetic_basis="potts",
+        orthonormal=False,
+        use_concentration=False,
+        remove_last_cluster=False,
+        supercell_matcher=None,
+        site_matcher=None,
+        time_rev_sym=True,
+        **matcher_kwargs,
+    ):
+        """Create a ChemoMagneticSubspace from diameter cutoffs.
+
+        Creates a :class:`ChemoMagneticSubspace` with orbits of the given size and
+        diameter smaller than or equal to the given value. The diameter of an
+        orbit is the maximum distance between any two sites of a cluster of
+        that orbit.
+
+        Args:
+           structure (Structure):
+               disordered structure to build a cluster expansion for.
+               Typically the primitive cell
+           chemical_cutoffs (dict):
+               dict of {cluster_size: diameter cutoff} for constructing chemical orbits.
+               Cutoffs should be strictly decreasing. Typically something like
+               {2:5, 3:4}. The empty orbit is always included. Singlets are by default
+               included, with the exception below.
+               To obtain a subspace with only an empty and singlet terms use
+               an empty dict {}, or {1: 1}. Adding a cutoff term for point
+               terms, i.e. {1: None} is useful to exclude point terms, any other
+               value for the cutoff will simply be ignored.
+           magnetic_cutoffs (dict):
+               Same dict as for chemical_cutoffs, but for determining magnetic orbits
+
+           remove_last_cluster (bool): optional
+               if True, will remove the last cluster labeling (decoration)
+               from each orbit. Since sum of corr for all labelings = 1,
+               removing the last is similar to working in concentration space.
+           supercell_matcher (StructureMatcher): (optional)
+               StructureMatcher used to find supercell matrices
+               relating the prim structure to other structures. If you pass
+               this directly you should know how to set the matcher up,
+               otherwise matching your relaxed structures will fail, a lot.
+           site_matcher (StructureMatcher): (optional)
+               StructureMatcher used to find site mappings
+               relating the sites of a given structure to an appropriate
+               supercell of the prim structure . If you pass this directly you
+               should know how to set the matcher up, otherwise matching your
+               relaxed structures will fail, a lot.
+           matcher_kwargs:
+               ltol, stol, angle_tol, supercell_size: parameters to pass
+               through to the StructureMatchers. Structures that don't match
+               to the primitive cell under these tolerances won't be included
+               in the expansion. Easiest option for supercell_size is usually
+               to use a species that has a constant amount per formula unit.
+
+        Returns:
+           ChemoMagneticSubspace
+        """
+        # get symmetry operations of prim structure.
+        #         symops = SpacegroupAnalyzer(structure).get_symmetry_operations()
+        #         # get the active sites (partial occupancy or magnetic) to expand over the ionic
+        #         # and magnetic degrees of freedom.
+        symops = SpacegroupAnalyzer(structure).get_symmetry_operations()
+
+        sites_to_expand = [
+            site
+            for site in structure
+            if site.species.num_atoms < 0.99 or len(site.species) > 1
+        ]
+
+        expansion_structure = Structure.from_sites(sites_to_expand)
+
+        # Create an expansion structure including only sites with chemical disorder, for
+        # ease of constructing "chemical" orbits.
+        structure_no_spin = structure.copy()
+        structure_no_spin.remove_spin()
+
+        sites_to_expand_chemical = []
+        for site, sp_occ in zip(structure_no_spin, structure_no_spin.species_and_occu):
+            if site.species.num_atoms < 0.99 or len(site.species) > 1:
+                spec_d = {k: v for k, v in sp_occ.items()}
+                new_site = PeriodicSite(
+                    species=spec_d,
+                    coords=site.frac_coords,
+                    lattice=site.lattice,
+                    properties=site.properties,
+                )
+                sites_to_expand_chemical.append(new_site)
+
+        expansion_structure_chemical = Structure.from_sites(sites_to_expand_chemical)
+
+        # Find mapping between indices of the "global" site space to the "chemical" site
+        # space
+        cls._gen_chem_spec_inds_map(expansion_structure)
+
+        # get orbits within given cutoffs. Need to add indices mapping as parameter?
+        orbits_chemical = cls._gen_orbits_from_cutoffs(
+            expansion_structure_chemical,
+            chemical_cutoffs,
+            symops,
+            basis=chemical_basis,
+            orthonorm=orthonormal,
+            use_conc=use_concentration,
+        )
+
+        # mapping the "global" species index to the magnetic species index
+        cls._gen_mag_spec_inds_map(expansion_structure)
+
+        # Generate magnetic orbits. Start by creating a Pott's subspace, then prune the
+        # non-magnetic decorations.
+        sites_to_expand_magnetic = []
+
+        for site, sp_occ in zip(
+            expansion_structure, expansion_structure.species_and_occu
+        ):
+            mag_site_spec_d = {}
+            for i, (sp, occ) in enumerate(sp_occ.items()):
+                if sp.spin is not None:
+                    if abs(sp.spin) > 0.05:  # 0.05 as tolerance for non-zero moments
+                        mag_site_spec_d[
+                            Species(
+                                sp.element, oxidation_state=sp._oxi_state, spin=sp.spin
+                            )
+                        ] = occ
+
+            mag_site = PeriodicSite(
+                species=mag_site_spec_d,
+                coords=site.frac_coords,
+                lattice=site.lattice,
+                properties=site.properties,
+            )
+
+            if len(mag_site_spec_d) == 0:
+                continue
+            sites_to_expand_magnetic.append(mag_site)
+
+        if len(sites_to_expand_magnetic) == 0:
+            raise RuntimeError(
+                "Could not detect magnetic species! If there is only "
+                "chemical disorder, then create a ClusterSubspace."
+            )
+
+        expansion_structure_magnetic = Structure.from_sites(sites_to_expand_magnetic)
+
+        orbits_magnetic = PottsSubspace._gen_orbits_from_cutoffs(
+            expansion_structure_magnetic, magnetic_cutoffs, symops, remove_last_cluster
+        )
+
+        all_orbits = {}
+        for size, orbits_chem_l in orbits_chemical.items():
+            if time_rev_sym:  # do not include magnetic orbits with odd parity
+                if size % 2:
+                    all_orbits[size] = orbits_chem_l
+                else:
+                    orbits_mag_l = orbits_magnetic[size]
+                    all_orbits[size] = orbits_chem_l.extend(orbits_mag_l)
+
+        return cls(
+            structure=structure,
+            expansion_structure=expansion_structure,
+            symops=symops,
+            orbits=all_orbits,
+            supercell_matcher=supercell_matcher,
+            site_matcher=site_matcher,
+            **matcher_kwargs,
+        )
+
+    @staticmethod
+    def _gen_chem_spec_inds_map(exp_struct):
+        """Generate mapping of "global" species indices and chemical species indices.
+
+        Args:
+            exp_struct (Structure):
+                Structure with all sites that have magnetic and/or chemical disorder.
+        """
+        chem_spec_inds_map = []
+
+        for site, sp_occ in zip(exp_struct, exp_struct.species_and_occu):
+            chem_site_inds_map = {}
+            chem_spec_map = {}
+            chem_spec_counter = 0
+
+            for i, (sp, occ) in enumerate(sp_occ.items()):
+                sp_no_spin = Species(sp.element, oxidation_state=sp._oxi_state)
+                if sp_no_spin not in chem_spec_map:
+                    chem_spec_map[sp_no_spin] = chem_spec_counter
+                    chem_site_inds_map[i] = chem_spec_counter
+                    chem_spec_counter += 1
+                else:
+                    chem_site_inds_map[i] = chem_spec_map[sp_no_spin]
+
+            chem_spec_inds_map.append(chem_site_inds_map)
+
+        return chem_spec_inds_map
+
+    @staticmethod
+    def _gen_mag_spec_inds_map(exp_struct):
+        """Generate mapping of "global" species indices and magnetic species indices.
+
+        Args:
+            exp_struct (Structure):
+                Structure with all sites that have magnetic and/or chemical disorder.
+
+        Returns:
+            mag_spec_inds_map (list of dicts):
+                List of dicts, one for each magnetic site in exp_struc. Relates the
+                species indices of exp_struc (global_spec_ind) to the indices of
+                magnetic species (mag_spec_ind)
+                [{global_spec_ind: mag_spec_ind, ...} ...]
+        """
+        mag_spec_inds_map = []
+        for site, sp_occ in zip(exp_struct, exp_struct.species_and_occu):
+            mag_site_spec_d = {}
+            mag_site_inds_map = {}
+            mag_spec_counter = 0
+
+            for i, (sp, occ) in enumerate(sp_occ.items()):
+                if sp.spin is not None:
+                    if abs(sp.spin) > 0.05:  # 0.05 as tolerance for non-zero moments
+                        mag_site_inds_map[i] = mag_spec_counter
+                        mag_site_spec_d[
+                            Species(
+                                sp.element, oxidation_state=sp._oxi_state, spin=sp.spin
+                            )
+                        ] = occ
+                        mag_spec_counter += 1
+            if len(mag_site_spec_d) == 0:
+                continue
+            mag_spec_inds_map.append(mag_site_inds_map)
+
+        return mag_spec_inds_map
+
+    @staticmethod
+    def _gen_orbits_from_cutoffs(
+        exp_struct, cutoffs, symops, basis, orthonorm, use_conc
+    ):
+        """Generate orbits from diameter cutoffs.
+
+        Generates dictionary of orbits in the same way that the cluster
+        subspace class does, except that the orbit functions (and corresponding
+        bit combos) include all symmetrically distinct decorations/labelings
+        of indicator functions for all allowed species (except 1 decoration
+        for each orbit since this value is just 1 - sum of concentration of all
+        other decorations
+
+        Args:
+            exp_struct (Structure):
+                Structure with all sites that have partial occupancy.
+            cutoffs (dict):
+                dict of cutoffs for cluster diameters {size: cutoff}
+            symops (list of SymmOps):
+                list of symmetry operations for structure
+            remove_last (bool):
+                remove the last cluster labeling from each orbit.
+
+        Returns:
+            dict: {size: list of Orbits within diameter cutoff}
+        """
+        site_spaces = get_site_spaces(exp_struct)
+        site_bases = tuple(
+            basis_factory(basis, site_space) for site_space in site_spaces
+        )
+        orbits = {}
+        nbits = np.array([len(b) for b in site_spaces])
+
+        try:
+            if cutoffs.pop(1) is None:
+                if len(cutoffs) != 0:
+                    raise ValueError(
+                        f"Unable to generate clusters of higher order "
+                        f" {cutoffs} if point terms are excluded."
+                    )
+                return {}
+        except KeyError:
+            pass
+
+        # Generate singlet/point orbits
+        orbits[1] = ChemoMagneticSubspace._gen_point_orbits(
+            exp_struct, site_bases, nbits, symops
+        )
+
+        if len(cutoffs) == 0:  # return singlets only if no cutoffs provided
+            return orbits
+
+        orbits.update(
+            ChemoMagneticSubspace._gen_multi_orbits(
+                orbits[1], exp_struct, cutoffs, site_bases, nbits, symops
+            )
+        )
+
+        if remove_last:
+            for orbs in orbits.values():
+                for orb in orbs:
+                    orb.remove_bit_combos_by_inds([len(orb.bit_combos) - 1])
+
+        return orbits
+
+    @staticmethod
+    def _gen_point_orbits(exp_struct, site_bases, nbits, symops, spec_inds_map):
+        """Generate point orbits.
+
+        Args:
+            nbits (ndarray):
+                array with total values for function indices per site.
+            exp_struct (Structure):
+                expansion structure, disordered sites only.
+            site_bases (list of DiscreteBasis):
+                list of site basis for each site in the expansion structure.
+            symops (list of SymmOp):
+                lists of symmetry operations of the underlying structure.
+            spec_inds_map (list of dict):
+                list of dictionaries mapping the global species index to the chemical/
+                magnetic species indices. List length is the number of sites in the
+                expansion structure
+
+        Returns:
+            list of Orbits:
+                list of point orbits.
+        """
+        pt_orbits = []
+        for nbit, site, sbasis in zip(nbits, exp_struct, site_bases):
+            # Coordinates of point terms must stay in [0, 1] to guarantee
+            # correct math of the following algorithm.
+            new_orbit = Orbit(
+                [np.mod(site.frac_coords, 1)],
+                exp_struct.lattice,
+                [list(range(nbit))],
+                [sbasis],
+                symops,
+            )
+            if new_orbit not in pt_orbits:
+                pt_orbits.append(new_orbit)
+
+        # sorted by decreasing crystallographic multiplicity and finally by increasing
+        # number of correlation functions (bit combos) -> so that higher symmetry orbits
+        # come first
+        pt_orbits = sorted(
+            pt_orbits,
+            key=lambda x: (
+                -x.multiplicity,
+                len(x),
+            ),
+        )
+        return pt_orbits
+
+    @property
+    def orbits(self):
+        """Return a list of all orbits sorted by size."""
+        return [orbit for _, orbits in sorted(self._orbits.items()) for orbit in orbits]
+
+    @property
+    def magnetic_orbits(self):
+        """Return a list of magnetic orbits sorted by size."""
+        return [
+            orbit
+            for _, orbits in sorted(self._magnetic_orbits.items())
+            for orbit in orbits
+        ]
+
+    @property
+    def chemical_orbits(self):
+        """Return a list of chemical orbits sorted by size."""
+        return [
+            orbit
+            for _, orbits in sorted(self._chemical_orbits.items())
+            for orbit in orbits
+        ]
+
+    def corr_from_structure(
+        self, structure, normalized=True, scmatrix=None, site_mapping=None
+    ):
+        """Get correlation vector for structure.
+
+        Returns the correlation vector for a given structure. To do this, the
+        correct supercell matrix of the prim needs to be found to then
+        determine the mappings between sites to create the occupancy
+        string and also determine the orbit mappings to evaluate the
+        corresponding cluster functions.
+
+        Args:
+            structure (Structure):
+                Structure to compute correlation from
+            normalized (bool):
+                return the correlation vector normalized by the prim cell size.
+                In theory correlation vectors are always normalized, but
+                getting them without normalization allows to compute the
+                "extensive" values.
+            scmatrix (ndarray): optional
+                supercell matrix relating the prim structure to the given
+                structure. Passing this if it has already been matched will
+                make things much quicker. You are responsible that the
+                supercell matrix is correct.
+            site_mapping (list): optional
+                Site mapping as obtained by
+                :code:`StructureMatcher.get_mapping`
+                such that the elements of site_mapping represent the indices
+                of the matching sites to the prim structure. If you pass this
+                option, you are fully responsible that the mappings are correct!
+
+        Returns:
+            array: correlation vector for given structure
+        """
+        if scmatrix is None:
+            scmatrix = self.scmatrix_from_structure(structure)
+
+        occu = self.occupancy_from_structure(
+            structure, scmatrix=scmatrix, site_mapping=site_mapping, encode=True
+        )
+        # First do chem correlations, then magnetic correlations
+        chem_indices = self.get_orbit_indices(scmatrix, orbit_type="chemical")
+        chem_corr = self._evaluator.correlations_from_occupancy(
+            occu, chem_indices.container
+        )  # might need to make separate evaluators
+
+        mag_indices = self.get_orbit_indices(scmatrix, orbit_type="magnetic")
+        mag_corr = self._evaluator.correlations_from_occupancy(
+            occu, mag_indices.container
+        )
+
+        corr = np.concatenate([chem_corr, mag_corr])
+        size = self.num_prims_from_matrix(scmatrix)
+
+        if self.external_terms:
+            supercell = self.structure.copy()
+            supercell.make_supercell(scmatrix)
+            extras = [
+                term.value_from_occupancy(occu, supercell) / size
+                for term in self._external_terms
+            ]
+            corr = np.concatenate([corr, *extras])
+
+        if not normalized:
+            corr *= size
+
+        return corr
+
+    def get_orbit_indices(self, scmatrix, orbit_type="chemical"):
+        """Get the OrbitIndices named tuple for a given supercell matrix.
+
+        If the indices have not been cached then they are generated by generating
+        the site mappings for the given supercell.
+        """
+        # np.arrays are not hashable and can't be used as dict keys.
+        scmatrix = np.array(scmatrix)
+        scm = tuple(sorted(tuple(s.tolist()) for s in scmatrix))
+        orbit_indices = self._supercell_orbit_inds.get(scm)
+
+        if orbit_indices is None:
+            orbit_indices = self._gen_orbit_indices(scmatrix, orbit_type=orbit_type)
+            self._supercell_orbit_inds[scm] = orbit_indices
+
+        return orbit_indices
+
+    def _gen_orbit_indices(self, scmatrix, orbit_type="chemical"):
+        """Find all the cluster site indices associated with each orbit in structure.
+
+        The structure corresponding to the given supercell matrix w.r.t prim.
+        """
+        supercell = self.structure.copy()
+        supercell.make_supercell(scmatrix)
+        prim_to_supercell = np.linalg.inv(scmatrix)
+        supercell_fcoords = np.array(supercell.frac_coords)
+
+        pts = lattice_points_in_supercell(scmatrix)
+        orbit_indices = []
+        if orbit_type == "chemical":
+            orbits_l = self.chemical_orbits
+        elif orbit_type == "magnetic":
+            orbits_l = self.magnetic_orbits
+        elif orbit_type == "all":
+            orbits_l = self.orbits
+        else:
+            raise RuntimeError(
+                f"The specified orbit type {orbit_type} is not "
+                f'recognized! Specify either "chemical", "magnetic", or '
+                f'"all".'
+            )
+
+        for orbit in orbits_l:
+            prim_fcoords = np.array([c.frac_coords for c in orbit.clusters])
+            fcoords = np.dot(prim_fcoords, prim_to_supercell)
+            # tcoords contains all the coordinates of the symmetrically
+            # equivalent clusters the indices are: [equivalent cluster
+            # (primitive cell), translational image, index of site in cluster,
+            # coordinate index]
+            tcoords = fcoords[:, None, :, :] + pts[None, :, None, :]
+            tcs = tcoords.shape
+            inds = coord_list_mapping_pbc(
+                tcoords.reshape((-1, 3)), supercell_fcoords, atol=SITE_TOL
+            ).reshape((tcs[0] * tcs[1], tcs[2]))
+            # orbit_ids holds orbit, and 2d array of index groups that
+            # correspond to the orbit
+            # the 2d array may have some duplicates. This is due to
+            # symmetrically equivalent groups being matched to the same sites
+            # (eg in simply cubic all 6 nn interactions will all be [0, 0]
+            # indices. This multiplicity disappears as supercell_structure size
+            # increases, so I haven't implemented a more efficient method
+
+            # assure contiguous C order
+            orbit_indices.append(np.ascontiguousarray(inds, dtype=int))
+
+        orbit_indices = tuple(orbit_indices)
+        return OrbitIndices(orbit_indices, IntArray2DContainer(orbit_indices))
