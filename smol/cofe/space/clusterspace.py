@@ -2094,8 +2094,8 @@ class ChemoMagneticSubspace(ClusterSubspace):
         )
 
         self._mag_evaluator = ClusterSpaceEvaluator(
-            get_orbit_data(self.magnetic_orbits),
-            len(self.magnetic_orbits),
+            get_orbit_data(self._magnetic_orbits),
+            len(self.magnetic_orbits) + 1,
             self.num_corr_functions,
         )
 
@@ -2198,7 +2198,7 @@ class ChemoMagneticSubspace(ClusterSubspace):
 
         # Find mapping between indices of the "global" site space to the "chemical" site
         # space
-        cls._gen_chem_spec_inds_map(expansion_structure)
+        # cls._gen_chem_spec_inds_map(expansion_structure)
 
         # get orbits within given cutoffs. Need to add indices mapping as parameter?
         orbits_chemical = cls._gen_orbits_from_cutoffs(
@@ -2211,10 +2211,8 @@ class ChemoMagneticSubspace(ClusterSubspace):
         )
 
         # mapping the "global" species index to the magnetic species index
-        cls._gen_mag_spec_inds_map(expansion_structure)
+        # cls._gen_mag_spec_inds_map(expansion_structure)
 
-        # Generate magnetic orbits. Start by creating a Pott's subspace, then prune the
-        # non-magnetic decorations.
         sites_to_expand_magnetic = []
 
         for site, sp_occ in zip(
@@ -2222,13 +2220,11 @@ class ChemoMagneticSubspace(ClusterSubspace):
         ):
             mag_site_spec_d = {}
             for i, (sp, occ) in enumerate(sp_occ.items()):
-                if sp.spin is not None:
-                    if abs(sp.spin) > 0.05:  # 0.05 as tolerance for non-zero moments
-                        mag_site_spec_d[
-                            Species(
-                                sp.element, oxidation_state=sp._oxi_state, spin=sp.spin
-                            )
-                        ] = occ
+                if sp.spin is not None and abs(sp.spin) > 0.05:
+                    # 0.05 as tolerance for non-zero moments
+                    mag_site_spec_d[
+                        Species(sp.element, oxidation_state=sp._oxi_state, spin=sp.spin)
+                    ] = occ
 
             mag_site = PeriodicSite(
                 species=mag_site_spec_d,
@@ -2244,33 +2240,88 @@ class ChemoMagneticSubspace(ClusterSubspace):
         if len(sites_to_expand_magnetic) == 0:
             raise RuntimeError(
                 "Could not detect magnetic species! If there is only "
-                "chemical disorder, then create a ClusterSubspace."
+                "chemical disorder, then create a different ClusterSubspace."
             )
 
-        expansion_structure_magnetic = Structure.from_sites(sites_to_expand_magnetic)
+        # expansion_structure_magnetic = Structure.from_sites(sites_to_expand_magnetic)
+
+        # Generate magnetic orbits. Start by creating a Pott's subspace, then prune the
+        # non-magnetic decorations.
 
         orbits_magnetic = PottsSubspace._gen_orbits_from_cutoffs(
-            expansion_structure_magnetic, magnetic_cutoffs, symops, remove_last_cluster
+            expansion_structure, magnetic_cutoffs, symops, remove_last_cluster
         )
 
-        all_orbits = {}
-        for size, orbits_chem_l in orbits_chemical.items():
-            if time_rev_sym:  # do not include magnetic orbits with odd parity
-                if size % 2:
-                    all_orbits[size] = orbits_chem_l
-                else:
-                    orbits_mag_l = orbits_magnetic[size]
-                    all_orbits[size] = orbits_chem_l.extend(orbits_mag_l)
+        pruned_orbits_magnetic = {}
+        # remove the correlation functions containing non-magnetic terms
+        for size, orbits in orbits_magnetic.items():
+            if time_rev_sym and size % 2:  # Exclude orbits with odd parity/degree
+                continue
+            orbits_l = []
+            for orb in orbits:
+                non_mag_inds = []  # list of list of indices of non-mag. species
+                for spec_l in orb.site_spaces:
+                    non_mag_inds.append(
+                        [
+                            i
+                            for i, spec in enumerate(spec_l)
+                            if spec.spin is None or abs(spec.spin) <= 0.05
+                        ]
+                    )
+
+                corr_inds_to_remove = []
+                for j, combos in enumerate(orb.bit_combos):
+                    for k, bit in enumerate(combos[0]):
+                        if bit in non_mag_inds[k]:
+                            corr_inds_to_remove.append(j)
+
+                orb.remove_bit_combos_by_inds(corr_inds_to_remove)
+                orbits_l.append(orb)
+
+            if len(orbits_l) == 0:
+                print(f"No magnetic orbits of size {size}")
+                continue
+            pruned_orbits_magnetic[size] = orbits_l
+
+        if len(pruned_orbits_magnetic) == 0:
+            raise RuntimeError(
+                "There are no magnetic orbits detected! Perhaps a normal "
+                "ClusterSubspace is more suitable for this system."
+            )
 
         return cls(
             structure=structure,
             expansion_structure=expansion_structure,
             symops=symops,
-            orbits=all_orbits,
+            chemical_orbits=orbits_chemical,
+            magnetic_orbits=pruned_orbits_magnetic,
             supercell_matcher=supercell_matcher,
             site_matcher=site_matcher,
             **matcher_kwargs,
         )
+
+    @property
+    def orbits(self):
+        """Return a list of all orbits sorted by size."""
+        return [orbit for _, orbits in sorted(self._orbits.items()) for orbit in orbits]
+
+    @property
+    def magnetic_orbits(self):
+        """Return a list of magnetic orbits sorted by size."""
+        return [
+            orbit
+            for _, orbits in sorted(self._magnetic_orbits.items())
+            for orbit in orbits
+        ]
+
+    @property
+    def chemical_orbits(self):
+        """Return a list of chemical orbits sorted by size."""
+        return [
+            orbit
+            for _, orbits in sorted(self._chemical_orbits.items())
+            for orbit in orbits
+        ]
 
     @staticmethod
     def _gen_chem_spec_inds_map(exp_struct):
@@ -2395,11 +2446,6 @@ class ChemoMagneticSubspace(ClusterSubspace):
             )
         )
 
-        if remove_last:
-            for orbs in orbits.values():
-                for orb in orbs:
-                    orb.remove_bit_combos_by_inds([len(orb.bit_combos) - 1])
-
         return orbits
 
     @staticmethod
@@ -2449,29 +2495,6 @@ class ChemoMagneticSubspace(ClusterSubspace):
             ),
         )
         return pt_orbits
-
-    @property
-    def orbits(self):
-        """Return a list of all orbits sorted by size."""
-        return [orbit for _, orbits in sorted(self._orbits.items()) for orbit in orbits]
-
-    @property
-    def magnetic_orbits(self):
-        """Return a list of magnetic orbits sorted by size."""
-        return [
-            orbit
-            for _, orbits in sorted(self._magnetic_orbits.items())
-            for orbit in orbits
-        ]
-
-    @property
-    def chemical_orbits(self):
-        """Return a list of chemical orbits sorted by size."""
-        return [
-            orbit
-            for _, orbits in sorted(self._chemical_orbits.items())
-            for orbit in orbits
-        ]
 
     def corr_from_structure(
         self, structure, normalized=True, scmatrix=None, site_mapping=None
@@ -2541,6 +2564,90 @@ class ChemoMagneticSubspace(ClusterSubspace):
 
         return corr
 
+    def occupancy_from_structure(
+        self, structure, scmatrix=None, site_mapping=None, type="global", encode=False
+    ):
+        """Occupancy string for a given structure.
+
+        Returns a list of occupancies of each site in the structure in the
+        appropriate order set implicitly by the supercell matrix that is found.
+
+        This function is used as input to compute correlation vectors for the
+        given structure.
+
+        This function is also useful to obtain an initial occupancy for a Monte
+        Carlo simulation. (Make sure that the same supercell matrix is being
+        used here as in the instance of the processor class for the simulation.
+        Although it is recommended to use the similar function in Processor
+        classes.)
+
+        Args:
+            structure (Structure):
+                structure to obtain a occupancy string for
+            scmatrix (array): optional
+                supercell matrix relating the given structure and the
+                primitive structure. If you pass the supercell, you fully are
+                responsible that it is the correct one! This prevents running
+                the _scmatcher (supercell structure matcher)
+            site_mapping (list): optional
+                site mapping as obtained by StructureMatcher.get_mapping
+                such that the elements of site_mapping represent the indices
+                of the matching sites to the prim structure. If you pass this
+                option, you are fully responsible that the mappings are correct!
+                This prevents running _site_matcher to get the mappings.
+            type (str): optional - 'global' or 'chemical'
+                specify the type of occupancy to return. For 'chemical', the occupancies
+                returned are agnostic to spin. So Mn3(up) and Mn 3(down) will be
+                identified as Mn3. If encoded, the indices will similarly be altered to
+                chemical species only.
+            encode (bool): optional
+                if True, the occupancy string will have the index of the species
+                in the expansion structure site spaces, rather than the
+                species itself.
+
+        Returns:
+            list: occupancy string for structure.
+        """
+        if scmatrix is None:
+            scmatrix = self.scmatrix_from_structure(structure)
+
+        supercell = self.structure.copy()
+        supercell.make_supercell(scmatrix)
+
+        if site_mapping is None:
+            site_mapping = self.structure_site_mapping(supercell, structure)
+
+        occu = []  # np.zeros(len(self.supercell_structure), dtype=int)
+
+        for i, allowed_species in enumerate(get_allowed_species(supercell)):
+            # rather than starting with all vacancies and looping
+            # only over mapping, explicitly loop over everything to
+            # catch vacancies on improper sites
+            if type == "chemical":  # Change list to include chemical species only
+                allowed_species = [
+                    Species(symbol=sp.element, oxidation_state=sp._oxi_state)
+                    for sp in allowed_species
+                ]
+                # then alter the site_mapping to reflect chemical species only
+
+            if i in site_mapping:
+                spec = structure[site_mapping.index(i)].specie
+            else:
+                spec = Vacancy()
+            if spec not in allowed_species:
+                raise StructureMatchError(
+                    "A site in given structure has an  unrecognized species " f"{spec}."
+                )
+            if encode:
+                occu.append(allowed_species.index(spec))
+            else:
+                occu.append(spec)
+
+        if encode:  # cast to ndarray dtype int
+            occu = np.array(occu, dtype=int)
+
+        return occu
+
     def get_orbit_indices(self, scmatrix, orbit_type="chemical"):
         """Get the OrbitIndices named tuple for a given supercell matrix.
 
@@ -2608,3 +2715,22 @@ class ChemoMagneticSubspace(ClusterSubspace):
 
         orbit_indices = tuple(orbit_indices)
         return OrbitIndices(orbit_indices, IntArray2DContainer(orbit_indices))
+
+    def _assign_orbit_ids(self):
+        """Assign unique id's to orbit.
+
+        Assign unique id's to each orbit based on all its orbit functions and
+        all clusters in the prim structure that are in each orbit.
+        """
+        counts = (1, 1, 1)  # Start with assigning chemical orbits, then magnetic
+        for key in sorted(self._chemical_orbits.keys()):
+            for orbit in self._chemical_orbits[key]:
+                counts = orbit.assign_ids(*counts)
+
+        for key in sorted(self._magnetic_orbits.keys()):
+            for orbit in self._magnetic_orbits[key]:
+                counts = orbit.assign_ids(*counts)
+
+        self.num_orbits = counts[0]
+        self.num_corr_functions = counts[1]
+        self.num_clusters = counts[2]
