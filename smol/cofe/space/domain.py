@@ -21,7 +21,7 @@ from pymatgen.core.periodic_table import DummySpecies, Element, Species, get_el_
 from pymatgen.util.string import formula_double_format
 
 
-def get_allowed_species(structure) -> list[Species]:
+def get_allowed_species(structure, ignore_spin=False) -> list[Species]:
     """Get the allowed species for each site in a disordered structure.
 
     This will get all the allowed species for each site in a pymatgen structure.
@@ -36,15 +36,20 @@ def get_allowed_species(structure) -> list[Species]:
         structure (Structure):
             Structure to determine site spaces from. At least some sites should
             be disordered, otherwise there is no point in using this.
+        ignore_spin (bool): optional
+            if False, species with different spin, but the same oxi state and element,
+            will be considered as separate species.
 
     Returns:
         list of Specie: list of allowed Species for each site
     """
-    all_site_spaces = get_site_spaces(structure)
+    all_site_spaces = get_site_spaces(structure, ignore_spin=ignore_spin)
     return [list(site_space.keys()) for site_space in all_site_spaces]
 
 
-def get_site_spaces(structure, include_measure=False) -> list[SiteSpace]:
+def get_site_spaces(
+    structure, include_measure=False, ignore_spin=False
+) -> list[SiteSpace]:
     """Get site spaces for each site in a disordered structure.
 
     Method to obtain the single site spaces for the sites in a structure.
@@ -63,6 +68,9 @@ def get_site_spaces(structure, include_measure=False) -> list[SiteSpace]:
         include_measure (bool): optional
             if True, will take the site compositions as the site space measure,
             otherwise a uniform measure is assumed.
+        ignore_spin (bool): optional
+            if False, species with different spin, but the same oxi state and element,
+            will be considered as separate species.
 
     Returns:
         SiteSpace: Allowed species and their corresponding measure.
@@ -78,6 +86,18 @@ def get_site_spaces(structure, include_measure=False) -> list[SiteSpace]:
             site_space = SiteSpace(
                 Composition({sp: 1.0 / num_species for sp in site.species.keys()})
             )
+        if ignore_spin:
+            # Species with same oxi state and element, but diff spin will be identified
+            # as the same species
+            chem_spec_d = {}
+            for spec, occ in site_space.items():
+                chem_spec = Species(symbol=spec.element, oxidation_state=spec.oxi_state)
+                if chem_spec not in chem_spec_d:
+                    chem_spec_d[chem_spec] = occ
+                else:
+                    chem_spec_d[chem_spec] += occ
+            site_space = SiteSpace(Composition(chem_spec_d))
+
         all_site_spaces.append(site_space)
     return all_site_spaces
 
