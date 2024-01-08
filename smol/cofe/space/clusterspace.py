@@ -2087,6 +2087,22 @@ class ChemoMagneticSubspace(ClusterSubspace):
             **matcher_kwargs,
         )
 
+        structure_no_spin = structure.copy()
+        structure_no_spin.remove_spin()
+
+        sites_to_expand_chemical = []
+        for site, sp_occ in zip(structure_no_spin, structure_no_spin.species_and_occu):
+            spec_d = {k: v for k, v in sp_occ.items()}
+            new_site = PeriodicSite(
+                species=spec_d,
+                coords=site.frac_coords,
+                lattice=site.lattice,
+                properties=site.properties,
+            )
+            sites_to_expand_chemical.append(new_site)
+
+        self.chemical_structure = Structure.from_sites(sites_to_expand_chemical)
+
         self._supercell_mag_orbit_inds = {}
 
         self._chem_evaluator = ClusterSpaceEvaluator(
@@ -2207,10 +2223,10 @@ class ChemoMagneticSubspace(ClusterSubspace):
                 )
                 sites_to_expand_chemical.append(new_site)
 
-        expansion_structure_chemical = Structure.from_sites(sites_to_expand_chemical)
+        chem_expansion_structure = Structure.from_sites(sites_to_expand_chemical)
 
         orbits_chemical = cls._gen_orbits_from_cutoffs(
-            expansion_structure_chemical,
+            chem_expansion_structure,
             chemical_cutoffs,
             symops,
             basis=chemical_basis,
@@ -2429,10 +2445,11 @@ class ChemoMagneticSubspace(ClusterSubspace):
         size = self.num_prims_from_matrix(scmatrix)
 
         if self.external_terms:
-            supercell = self.structure.copy()
+            # Assume external terms evaluated on chemical occupation.
+            supercell = self.chemical_structure.copy()
             supercell.make_supercell(scmatrix)
             extras = [
-                term.value_from_occupancy(occu, supercell) / size
+                term.value_from_occupancy(chem_occu, supercell) / size
                 for term in self._external_terms
             ]
             corr = np.concatenate([corr, *extras])
@@ -2639,7 +2656,6 @@ class ChemoMagneticSubspace(ClusterSubspace):
         for key in sorted(self._chemical_orbits.keys()):
             for orbit in self._chemical_orbits[key]:
                 counts = orbit.assign_ids(*counts)
-                print(counts, orbit.id)
 
         self.num_chem_orbits = counts[0]
         self.num_chem_corr_functions = counts[1]
