@@ -7,7 +7,6 @@ The PottsSubspace class is an (experimental) class that is similar, but
 diverges from the CE mathematic formalism.
 """
 # pylint: disable=too-many-lines
-import copy
 import warnings
 from collections import namedtuple
 from copy import deepcopy
@@ -2066,9 +2065,12 @@ class ChemoMagneticSubspace(ClusterSubspace):
                 more details.
         """
         # self._time_rev_sym = time_rev_sym
+        self._chemical_orbits = chemical_orbits
+        self._magnetic_orbits = magnetic_orbits
+
         all_orbits = {}
         for size, chem_orbs in chemical_orbits.items():
-            all_orbs = copy.deepcopy(chem_orbs)
+            all_orbs = [o for o in chem_orbs]
             if size in magnetic_orbits:
                 mag_orbs = magnetic_orbits[size]
                 all_orbs.extend(mag_orbs)
@@ -2076,8 +2078,6 @@ class ChemoMagneticSubspace(ClusterSubspace):
             all_orbits[size] = all_orbs
 
         self._orbits = all_orbits
-        self._chemical_orbits = chemical_orbits
-        self._magnetic_orbits = magnetic_orbits
 
         super().__init__(
             structure,
@@ -2088,6 +2088,8 @@ class ChemoMagneticSubspace(ClusterSubspace):
             site_matcher,
             **matcher_kwargs,
         )
+
+        self._supercell_mag_orbit_inds = {}
 
         self._chem_evaluator = ClusterSpaceEvaluator(
             get_orbit_data(self.chemical_orbits),
@@ -2563,6 +2565,7 @@ class ChemoMagneticSubspace(ClusterSubspace):
         mag_corr = self._mag_evaluator.correlations_from_occupancy(
             occu, mag_indices.container
         )
+        mag_corr = mag_corr[1:]  # remove 1st element - redundant empty cluster
 
         corr = np.concatenate([chem_corr, mag_corr])
         size = self.num_prims_from_matrix(scmatrix)
@@ -2683,11 +2686,17 @@ class ChemoMagneticSubspace(ClusterSubspace):
         # np.arrays are not hashable and can't be used as dict keys.
         scmatrix = np.array(scmatrix)
         scm = tuple(sorted(tuple(s.tolist()) for s in scmatrix))
-        orbit_indices = self._supercell_orbit_inds.get(scm)
+        if orbit_type == "chemical":
+            orbit_indices = self._supercell_orbit_inds.get(scm)
+        elif orbit_type == "magnetic":
+            orbit_indices = self._supercell_mag_orbit_inds.get(scm)
 
         if orbit_indices is None:
             orbit_indices = self._gen_orbit_indices(scmatrix, orbit_type=orbit_type)
-            self._supercell_orbit_inds[scm] = orbit_indices
+            if orbit_type == "chemical":
+                self._supercell_orbit_inds[scm] = orbit_indices
+            elif orbit_type == "magnetic":
+                self._supercell_mag_orbit_inds[scm] = orbit_indices
 
         return orbit_indices
 
@@ -2749,7 +2758,6 @@ class ChemoMagneticSubspace(ClusterSubspace):
         all clusters in the prim structure that are in each orbit.
         """
         counts = (1, 1, 1)  # Start with assigning chemical orbits, then magnetic
-        print("Assigning chemical orbit IDs")
         for key in sorted(self._chemical_orbits.keys()):
             for orbit in self._chemical_orbits[key]:
                 counts = orbit.assign_ids(*counts)
@@ -2759,26 +2767,23 @@ class ChemoMagneticSubspace(ClusterSubspace):
         self.num_chem_corr_functions = counts[1]
         self.num_chem_clusters = counts[2]
 
-        print("Assigning magnetic orbit IDs")
+        mag_counts = (1, 1, 1)  # reset the cluster and fxn ids
         for key in sorted(self._magnetic_orbits.keys()):
             for orbit in self._magnetic_orbits[key]:
-                counts = orbit.assign_ids(*counts)
-                print(counts, orbit.id)
+                mag_counts = orbit.assign_ids(*mag_counts)
 
-        self.num_orbits = counts[0]
-        self.num_corr_functions = counts[1]
-        self.num_clusters = counts[2]
+        self.num_orbits = counts[0] + mag_counts[0]
+        self.num_corr_functions = counts[1] + mag_counts[1] - 1
+        self.num_clusters = counts[2] + mag_counts[2]
 
-        self.num_mag_orbits = self.num_orbits - self.num_chem_orbits
-        self.num_mag_corr_functions = (
-            self.num_corr_functions - self.num_chem_corr_functions
-        )
-        self.num_mag_clusters = self.num_clusters - self.num_chem_clusters
+        self.num_mag_orbits = mag_counts[0]
+        self.num_mag_corr_functions = mag_counts[1]
+        self.num_mag_clusters = mag_counts[2]
 
         # Update self._orbits
         self._orbits = {}
         for key in sorted(self._chemical_orbits.keys()):
-            orbs_l = self._chemical_orbits[key]
-            self._orbits[key] = orbs_l
+            self._orbits[key] = [o for o in self._chemical_orbits[key]]
+
             if key in self._magnetic_orbits:
-                self._orbits[key].extend(self._magnetic_orbits[key])
+                self._orbits[key].extend([o for o in self._magnetic_orbits[key]])
