@@ -2246,6 +2246,7 @@ class ChemoMagneticSubspace(ClusterSubspace):
                     for k, bit in enumerate(combos[0]):
                         if bit in non_mag_inds[k]:
                             corr_inds_to_remove.append(j)
+                            continue
 
                 orb.remove_bit_combos_by_inds(corr_inds_to_remove)
                 orbits_l.append(orb)
