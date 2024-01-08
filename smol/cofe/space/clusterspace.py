@@ -1992,21 +1992,23 @@ class ChemoMagneticSubspace(ClusterSubspace):
     """A ClusterSubspace spanning ionic and magnetic degrees of freedom.
 
     A ChemoMagneticSubspace is a related model to a standard ClusterSubspace used to
-    build a standard cluster expansion. The difference is that in addition to the standard
-    correlations functions that describe the chemical degrees of freedom, this subspace includes
-    functions that span the magnetic degrees of freedom. At the moment, we only consider
-    the magnetic structure arising from collinear spin polarization (spins only point up
-    and down, without spin canting). Furthermore, the magnetic and chemical correlation
-    functions are decoupled from each other, which is a simplification of previously
-    developed chemo-magnetic cluster expansion formalisms (see references below).
+    build a standard cluster expansion. The difference is that in addition to the
+    standard correlations functions that describe the chemical degrees of freedom, this
+    subspace includes functions that span the magnetic degrees of freedom. At the
+    moment, we only consider the magnetic structure arising from collinear spin
+    polarization (spins only point up and down). Furthermore, the magnetic and chemical
+    correlation functions are decoupled from each other, which is a simplification of
+    previously developed chemo-magnetic cluster expansion formalisms (see references
+    below).
     1) Drautz, R.; Fähnle, M. Phys Rev B 2004, 69 (10), 104404.
     2) Decolvenaere, E.; Ven, A. V. et al. Phys Rev Mater 2019, 3 (10), 104411.
 
     This model can be interpreted as a mixed-basis cluster subspace, in which the
     basis functions describing ionic disorder take a different form from those
-    describing the magnetic disorder. From internal benchmarking, we would recommend
-    using a Pott's indicator basis to represent the magnetic disorder, although the user
-    can specify the forms of ionic and magnetic basis functions.
+    describing the magnetic disorder. For the magnetic correlation functions, we use a
+    Pott's indicator basis that spans only the magnetic species on each sublattice.
+    The form of chemical basis functions can be selected, like in a standard
+    ClusterSubspace.
     """
 
     def __init__(
