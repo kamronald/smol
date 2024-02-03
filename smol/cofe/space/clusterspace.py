@@ -2681,3 +2681,113 @@ class ChemoMagneticSubspace(ClusterSubspace):
 
             if key in self._magnetic_orbits:
                 self._orbits[key].extend([o for o in self._magnetic_orbits[key]])
+
+    def copy(self):
+        """Deep copy of instance."""
+        return ChemoMagneticSubspace.from_dict(self.as_dict())
+
+    def as_dict(self):
+        """
+        Json-serialization dict representation.
+
+        Returns:
+            MSONable dict
+        """
+        # modify cached sc orbit indices so it can be serialized
+        _supercell_orb_inds = [
+            (scm, [indices.tolist() for indices in orbit_inds.arrays])
+            for scm, orbit_inds in self._supercell_orbit_inds.items()
+        ]
+
+        _supercell_mag_orb_inds = [
+            (scm, [indices.tolist() for indices in orbit_inds.arrays])
+            for scm, orbit_inds in self._supercell_mag_orbit_inds.items()
+        ]
+
+        cs_dict = {
+            "@module": self.__class__.__module__,
+            "@class": self.__class__.__name__,
+            "structure": self.structure.as_dict(),
+            "expansion_structure": self.expansion_structure.as_dict(),
+            "sc_matcher": self._sc_matcher.as_dict(),
+            "site_matcher": self._site_matcher.as_dict(),
+            "symops": jsanitize(self.symops, strict=True),
+            "orbits": jsanitize(self._orbits, strict=True),
+            "chemical_orbits": jsanitize(self._chemical_orbits, strict=True),
+            "magnetic_orbits": jsanitize(self._magnetic_orbits, strict=True),
+            "external_terms": jsanitize(self.external_terms, strict=True),
+            "_supercell_orb_inds": _supercell_orb_inds,
+            "_supercell_mag_orb_inds": _supercell_mag_orb_inds,
+        }
+        return cs_dict
+
+    @classmethod
+    def from_dict(cls, d):
+        """Create ClusterSubspace from an MSONable dict."""
+        symops = [SymmOp.from_dict(so_d) for so_d in d["symops"]]
+        chemical_orbits = {
+            int(s): [Orbit.from_dict(o) for o in v]
+            for s, v in d["chemical_orbits"].items()
+        }
+        magnetic_orbits = {
+            int(s): [Orbit.from_dict(o) for o in v]
+            for s, v in d["magnetic_orbits"].items()
+        }
+        structure = Structure.from_dict(d["structure"])
+        exp_structure = Structure.from_dict(d["expansion_structure"])
+        sc_matcher = StructureMatcher.from_dict(d["sc_matcher"])
+        site_matcher = StructureMatcher.from_dict(d["site_matcher"])
+        cluster_subspace = cls(
+            structure=structure,
+            expansion_structure=exp_structure,
+            symops=symops,
+            chemical_orbits=chemical_orbits,
+            magnetic_orbits=magnetic_orbits,
+            supercell_matcher=sc_matcher,
+            site_matcher=site_matcher,
+        )
+
+        # attempt to recreate external terms. This can be much improved if
+        # a base class is used.
+        # TODO update this using instances of BasePairTerm when the time comes
+        for term in d["external_terms"]:
+            try:
+                module = import_module(term["@module"])
+                term_class = getattr(module, term["@class"])
+                cluster_subspace.add_external_term(term_class.from_dict(term))
+            except AttributeError:
+                warnings.warn(
+                    f"{term['@class']} was not found in {term['@module']}. You"
+                    f" will need to add this yourself.",
+                    RuntimeWarning,
+                )
+            except ImportError:
+                warnings.warn(
+                    f"Module {term['@module']} for class {term['@class']} was "
+                    f"not found. You will have to add this yourself.",
+                    ImportWarning,
+                )
+        # re-create supercell orb inds cache
+        for orb_inds_type in ["_supercell_orb_inds", "_supercell_mag_orb_inds"]:
+            _sc_orbit_inds = {}
+            for scm, indices in d[orb_inds_type]:
+                scm = tuple(tuple(s) for s in scm)
+                if isinstance(indices[0][0], int) and isinstance(indices[0][1], list):
+                    warnings.warn(
+                        "This ClusterSubspace was created with a previous version "
+                        "of smol. Please resave it to avoid this warning.",
+                        FutureWarning,
+                    )
+                    _sc_orbit_inds[scm] = tuple(np.array(ind) for o_id, ind in indices)
+                else:
+                    _sc_orbit_inds[scm] = tuple(np.array(ind) for ind in indices)
+            # now generate the containers
+            _sc_orbit_inds = {
+                scm: OrbitIndices(indices, IntArray2DContainer(indices))
+                for scm, indices in _sc_orbit_inds.items()
+            }
+            if orb_inds_type == "_supercell_orb_inds":
+                cluster_subspace._supercell_orbit_inds = _sc_orbit_inds
+            else:
+                cluster_subspace._supercell_mag_orbit_inds = _sc_orbit_inds
+        return cluster_subspace
