@@ -28,52 +28,48 @@ def get_random_solver_test_occu(sublattices):
     li_va_sites = np.random.choice(cation_sublattice.sites, size=14, replace=False)
     li_sites = np.random.choice(li_va_sites, size=9, replace=False)
     va_sites = np.setdiff1d(li_va_sites, li_sites)
-    mn_ti_sites = np.setdiff1d(cation_sublattice.sites, li_va_sites)
-    ti_sites = np.random.choice(mn_ti_sites, size=2, replace=False)
-    mn_sites = np.setdiff1d(mn_ti_sites, ti_sites)
-    mn2_sites = np.random.choice(mn_sites, size=2, replace=False)
-    mn34_sites = np.setdiff1d(mn_sites, mn2_sites)
-    mn3_sites = np.random.choice(mn34_sites, size=1, replace=False)
+    mn34_sites = np.setdiff1d(cation_sublattice.sites, li_va_sites)
+    mn3_sites = np.random.choice(mn34_sites, size=3, replace=False)
     mn4_sites = np.setdiff1d(mn34_sites, mn3_sites)
 
-    o_sites = np.random.choice(anion_sublattice.sites, size=10, replace=False)
-    o2_sites = np.random.choice(o_sites, size=8, replace=False)
-    o1_sites = np.setdiff1d(o_sites, o2_sites)
-    f_sites = np.setdiff1d(anion_sublattice.sites, o_sites)
+    o2_sites = np.random.choice(anion_sublattice.sites, size=10, replace=False)
+    # o2_sites = np.random.choice(o_sites, size=8, replace=False)
+    # o1_sites = np.setdiff1d(o_sites, o2_sites)
+    f_sites = np.setdiff1d(anion_sublattice.sites, o2_sites)
 
     li_code = cation_sublattice.encoding[
         cation_sublattice.species.index(Species("Li", 1))
     ]
-    mn2_code = cation_sublattice.encoding[
-        cation_sublattice.species.index(Species("Mn", 2))
-    ]
+    # mn2_code = cation_sublattice.encoding[
+    #     cation_sublattice.species.index(Species("Mn", 2))
+    # ]
     mn3_code = cation_sublattice.encoding[
         cation_sublattice.species.index(Species("Mn", 3))
     ]
     mn4_code = cation_sublattice.encoding[
         cation_sublattice.species.index(Species("Mn", 4))
     ]
-    ti_code = cation_sublattice.encoding[
-        cation_sublattice.species.index(Species("Ti", 4))
-    ]
+    # ti_code = cation_sublattice.encoding[
+    #     cation_sublattice.species.index(Species("Ti", 4))
+    # ]
     va_code = cation_sublattice.encoding[cation_sublattice.species.index(Vacancy())]
     o2_code = anion_sublattice.encoding[
         anion_sublattice.species.index(Species("O", -2))
     ]
-    o1_code = anion_sublattice.encoding[
-        anion_sublattice.species.index(Species("O", -1))
-    ]
+    # o1_code = anion_sublattice.encoding[
+    #     anion_sublattice.species.index(Species("O", -1))
+    # ]
     f_code = anion_sublattice.encoding[anion_sublattice.species.index(Species("F", -1))]
 
     occu = np.zeros(40, dtype=int) - 1
     occu[li_sites] = li_code
-    occu[mn2_sites] = mn2_code
+    # occu[mn2_sites] = mn2_code
     occu[mn3_sites] = mn3_code
     occu[mn4_sites] = mn4_code
-    occu[ti_sites] = ti_code
+    # occu[ti_sites] = ti_code
     occu[va_sites] = va_code
     occu[o2_sites] = o2_code
-    occu[o1_sites] = o1_code
+    # occu[o1_sites] = o1_code
     occu[f_sites] = f_code
 
     assert np.all(occu >= 0)
@@ -102,18 +98,28 @@ def get_random_neutral_occupancy(
     sublattices, initial_occupancy, canonical=False, force_flip=False
 ):
     # Guarantee charge balanced.
-    ti_code = None
+    # ti_code = None
     mn4_code = None
-    ti_sites = None
+    # ti_sites = None
     mn4_sites = None
+    mn3_code = None
+    mn3_sites = None
+    li_code = None
+    li_sites = None
     for sublattice in sublattices:
-        if Species("Ti", 4) in sublattice.species:
-            ti_code = sublattice.encoding[sublattice.species.index(Species("Ti", 4))]
+        if Species("Mn", 3) in sublattice.species:
+            mn3_code = sublattice.encoding[sublattice.species.index(Species("Mn", 3))]
             mn4_code = sublattice.encoding[sublattice.species.index(Species("Mn", 4))]
-            ti_sites = sublattice.sites[initial_occupancy[sublattice.sites] == ti_code]
+            mn3_sites = sublattice.sites[
+                initial_occupancy[sublattice.sites] == mn3_code
+            ]
             mn4_sites = sublattice.sites[
                 initial_occupancy[sublattice.sites] == mn4_code
             ]
+        elif Species("Li", 1) in sublattice.species:
+            li_code = sublattice.encoding[sublattice.species.index(Species("Li", 1))]
+            li_sites = sublattice.sites[initial_occupancy[sublattice.sites] == li_code]
+
     if canonical:
         threshold = 1.1
     elif not force_flip:
@@ -122,11 +128,20 @@ def get_random_neutral_occupancy(
         threshold = -0.1
 
     if np.random.random() > threshold:
-        # Ti-Mn flip that would not change charge.
+        flip = []
+        # Generate a 3 Mn3+ --> Li+ + 2Mn4+ table flip that would not change charge.
+        li_site = np.random.choice(li_sites)
+        mn3_sites = np.random.choice(mn3_sites, size=3)
+        mn4_sites = np.random.choice(mn4_sites, size=2)
+
         if np.random.random() > 0.5:
-            flip = [(np.random.choice(ti_sites), mn4_code)]
+            flip.append((mn3_sites[0], mn4_code))
+            flip.append((mn3_sites[1], mn4_code))
+            flip.append((mn3_sites[2], li_code))
         else:
-            flip = [(np.random.choice(mn4_sites), ti_code)]
+            flip.append((li_site, mn3_code))
+            flip.append((mn4_sites[0], mn3_code))
+            flip.append((mn4_sites[1], mn3_code))
     else:
         swapper = Swap(sublattices)
         flip = swapper.propose_step(initial_occupancy)

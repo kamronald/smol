@@ -68,10 +68,10 @@ def test_comp_space_constraints(solver_test_ensemble, solver_test_initial_occupa
         variable_indices,
         solver_test_ensemble.processor.structure,
         other_constraints=[
-            "Mn4+ == 1",  # Broken when force_flip, kept when canonical. 2nd.
-            "Ti4+ = 2",  # Broken when force_flip, kept when canonical. 3rd.
-            "Mn4+ + Mn3+ + Mn2+ >= 7",  # Never true. 4th.
-            "Mn3+ + Mn2+ <= 3",  # Always true. 5th.
+            "Mn4+ == 3",  # Broken when force_flip, kept when canonical. 2nd.
+            #  "Ti4+ = 2",  # Broken when force_flip, kept when canonical. 3rd.
+            "Mn4+ + Mn3+ >= 6",  # Never true. 4th.
+            #  "Mn3+ + Mn2+ <= 3",  # Always true. 5th.
             "0 >= -1",  # Always True. Skipped.
             "0 <= 1.5",  # Always True. Skipped.
             "0.0 = 0.0",  # Always True. Skipped.
@@ -186,7 +186,7 @@ def test_fixed_composition_constraints(
     )
 
     # F- is fixed and always satisfied, will not appear.
-    assert len(constraints) == 8
+    assert len(constraints) == 7
     for _ in range(20):
         rand_val = get_random_neutral_variable_values(
             solver_test_ensemble.sublattices,

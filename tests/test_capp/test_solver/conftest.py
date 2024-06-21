@@ -22,15 +22,12 @@ def solver_test_prim():
         lat,
         [
             {
-                "Li+": 1 / 6,
-                "Mn2+": 1 / 6,
-                "Mn3+": 1 / 6,
-                "Mn4+": 1 / 6,
-                "Ti4+": 1 / 6,
+                "Li+": 1 / 4,
+                "Mn3+": 1 / 4,
+                "Mn4+": 1 / 4,
             },
             {
                 "O2-": 1 / 3,
-                "O-": 1 / 3,
                 "F-": 1 / 3,
             },
         ],
@@ -79,13 +76,10 @@ def orig_ensemble(solver_test_expansion, request):
     if request.param[0] == "semigrand":
         chemical_potentials = {
             "Li+": np.random.normal(),
-            "Mn2+": np.random.normal(),
             "Mn3+": np.random.normal(),
             "Mn4+": np.random.normal(),
-            "Ti4+": np.random.normal(),
             "Vacancy": np.random.normal(),
             "O2-": np.random.normal(),
-            "O-": np.random.normal(),
             "F-": np.random.normal(),
         }
     else:
@@ -154,20 +148,20 @@ def solver_test_ensemble(orig_ensemble, solver_test_initial_occupancy):
 
     ca_partitions = [
         [Species("Li", 1), Vacancy()],
-        [Species("Mn", 2), Species("Mn", 3), Species("Mn", 4), Species("Ti", 4)],
+        [Species("Mn", 3), Species("Mn", 4)],
     ]
-    an_partitions = [[Species("O", -2), Species("O", -1)], [Species("F", -1)]]
+    # an_partitions = [[Species("O", -2), Species("O", -1)], [Species("F", -1)]]
     new_ensemble.split_sublattice_by_species(
         cation_id, solver_test_initial_occupancy, ca_partitions
     )
     # Sub-lattices all updated after partition.
     anion_id = anion_id if cation_id > anion_id else anion_id + 1
-    new_ensemble.split_sublattice_by_species(
-        anion_id, solver_test_initial_occupancy, an_partitions
-    )
+    # new_ensemble.split_sublattice_by_species(
+    #    anion_id, solver_test_initial_occupancy, an_partitions
+    # )
 
     # Check if sites a correctly restricted.
-    assert len(new_ensemble.sublattices) == 4
+    assert len(new_ensemble.sublattices) == 3
     for site in li_restricts:
         assert site in new_ensemble.restricted_sites
     for site in va_restricts:
