@@ -38,6 +38,10 @@ def free_en_s_from_enthalpy(
     Similarly when integrating average enthalpies from grand-canonical MC
     (at fixed chemical potentials), this yields the grand-canonical free
     energy (omega = U - TS - mu*N).
+
+    Refer to A. van de Walle and M. Asta 2002 Modelling Simul. Mater. Sci. Eng. 10 521
+    for more details.
+
     Args:
         enthalpies (ndarray):
             averaged enthalpies from specified temperatures
@@ -56,10 +60,12 @@ def free_en_s_from_enthalpy(
             Spacing of beta values to interpolate over
 
     Returns:
-        temp_free_ens (dict):
+        thermal_props_d (dict):
             Dict of ndarrays containing temperature, free energy, average
             enthalpy, and entropy.
-            {'temperature': ndarray, 'free_energy': ndarray, 'enthalpy': ndarray}
+            {'temperature': ndarray, 'free_energy': ndarray, 'enthalpy': ndarray,
+            'entropy': ndarray
+            }
 
     """
     if ref_type not in ["high_t", "low_t"]:
@@ -91,6 +97,10 @@ def free_en_s_from_enthalpy(
                 interp_delta_beta,
             )
 
+        # include the original temperatures for convenience
+        beta_grid = np.concatenate([beta_grid, [1 / kB / t for t in temperatures]])
+        beta_grid = sorted(beta_grid)
+
         avg_enths_beta_integrate = [
             (beta, enth)
             for beta, enth in zip(beta_grid, avg_enths_beta_interp(beta_grid))
@@ -119,19 +129,19 @@ def free_en_s_from_enthalpy(
 
     temp_free_ens = sorted(temp_free_ens, key=lambda x: x[0])
 
-    temp_free_ens_d = {}
-    temp_free_ens_d["temperature"] = np.array([t[0] for t in temp_free_ens])
-    temp_free_ens_d["free_energy"] = np.array([t[1] for t in temp_free_ens])
-    temp_free_ens_d["enthalpy"] = np.array([t[2] for t in temp_free_ens])
+    thermal_props_d = {}
+    thermal_props_d["temperature"] = np.array([t[0] for t in temp_free_ens])
+    thermal_props_d["free_energy"] = np.array([t[1] for t in temp_free_ens])
+    thermal_props_d["enthalpy"] = np.array([t[2] for t in temp_free_ens])
 
-    temp_free_ens_d["entropy"] = np.array(
+    thermal_props_d["entropy"] = np.array(
         np.divide(
-            temp_free_ens_d["enthalpy"] - temp_free_ens_d["free_energy"],
-            temp_free_ens_d["temperature"],
+            thermal_props_d["enthalpy"] - thermal_props_d["free_energy"],
+            thermal_props_d["temperature"],
         )
     )
 
-    return temp_free_ens_d
+    return thermal_props_d
 
 
 def calculate_s_inf(compositions):
